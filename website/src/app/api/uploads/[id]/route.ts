@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { unlink } from "node:fs/promises";
 import { db } from "@/lib/db";
+import { deleteObject } from "@/lib/s3";
 
 /**
  * GET /api/uploads/:id — one ingested book (operator detail / download link).
@@ -35,12 +36,16 @@ export async function DELETE(
     if (!row) return NextResponse.json({ error: "Not found." }, { status: 404 });
 
     await db.bookUpload.delete({ where: { id } });
-    // Best effort: the catalogue record is already gone; a missing file
-    // on disk must never fail the request.
-    try {
-      await unlink(row.storagePath);
-    } catch {
-      /* file already removed or stored remotely — ignore */
+    // Best effort file cleanup — the catalogue record is already gone, so
+    // a missing file must never fail the request.
+    if (row.storage === "r2" && row.objectKey) {
+      await deleteObject(row.objectKey);
+    } else if (row.storagePath) {
+      try {
+        await unlink(row.storagePath);
+      } catch {
+        /* file already removed — ignore */
+      }
     }
     return NextResponse.json({ ok: true });
   } catch (error) {

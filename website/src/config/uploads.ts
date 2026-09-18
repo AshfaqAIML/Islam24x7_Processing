@@ -9,8 +9,14 @@
  */
 
 export const uploadConfig = {
-  /** Max single file size (bytes). */
-  maxFileSizeBytes: 100 * 1024 * 1024, // 100 MB
+  /**
+   * Max single file size (bytes). 1 GB fits comfortably in a Prisma Int
+   * (~2.1 GB cap) and covers ~1000-page scanned volumes; raise only
+   * together with the column type. Serverless platforms also cap request
+   * bodies (~4.5 MB on Vercel), so large files always upload DIRECTLY to
+   * object storage via presigned URLs — never through the Next.js API.
+   */
+  maxFileSizeBytes: 1 * 1024 * 1024 * 1024, // 1 GB
   /** Accepted extensions (lowercase, with dot). */
   allowedExtensions: [".pdf", ".docx", ".epub", ".txt", ".md"] as const,
   /** Accepted MIME types (browsers report these inconsistently, so the

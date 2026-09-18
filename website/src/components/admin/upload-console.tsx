@@ -45,6 +45,9 @@ interface UploadRow {
   author: string;
   category: string;
   language: string;
+  series: string | null;
+  volumeLabel: string | null;
+  storage: string;
   originalFilename: string;
   mimeType: string;
   fileSize: number;
@@ -54,9 +57,15 @@ interface UploadRow {
   createdAt: string;
 }
 
+interface ServerConfig {
+  provider: "r2" | "local";
+  maxFileSizeBytes: number;
+  accept: string[];
+}
+
 const ACCEPT = ".pdf,.docx,.epub,.txt,.md";
 
-function fileError(file: File): string | null {
+function fileError(file: File, maxBytes: number): string | null {
   const ext = file.name.includes(".")
     ? file.name.slice(file.name.lastIndexOf(".")).toLowerCase()
     : "";
@@ -66,8 +75,8 @@ function fileError(file: File): string | null {
     return `Unsupported file type "${ext || "unknown"}". Accepted: ${uploadConfig.allowedExtensions.join(", ")}`;
   }
   if (file.size <= 0) return "That file looks empty — pick another one.";
-  if (file.size > uploadConfig.maxFileSizeBytes) {
-    return `File is too large (${formatBytes(file.size)}). Max ${formatBytes(uploadConfig.maxFileSizeBytes)}.`;
+  if (file.size > maxBytes) {
+    return `File is too large (${formatBytes(file.size)}). Max ${formatBytes(maxBytes)} — split multi-volume sets one file per volume.`;
   }
   return null;
 }
@@ -89,14 +98,26 @@ export function UploadConsole() {
   const [publisher, setPublisher] = useState("");
   const [edition, setEdition] = useState("");
   const [license, setLicense] = useState("");
+  const [series, setSeries] = useState("");
+  const [volumeLabel, setVolumeLabel] = useState("");
   const [pageCount, setPageCount] = useState("");
 
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadStage, setUploadStage] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [notice, setNotice] = useState<{
     kind: "ok" | "err";
     text: string;
   } | null>(null);
+
+  // Server capability probe: "r2" = direct-to-storage for real books,
+  // "local" = dev-disk fallback. Falls back to local limits offline.
+  const [serverConfig, setServerConfig] = useState<ServerConfig>({
+    provider: "local",
+    maxFileSizeBytes: uploadConfig.maxFileSizeBytes,
+    accept: [...uploadConfig.allowedExtensions],
+  });
 
   const [rows, setRows] = useState<UploadRow[]>([]);
   const [listLoading, setListLoading] = useState(true);
@@ -123,6 +144,22 @@ export function UploadConsole() {
 
   useEffect(() => {
     fetchList();
+    // Capability probe (never blocks the form if it fails).
+    fetch("/api/uploads/config", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((json) => {
+        if (json && (json.provider === "r2" || json.provider === "local")) {
+          setServerConfig({
+            provider: json.provider,
+            maxFileSizeBytes:
+              Number(json.maxFileSizeBytes) > 0
+                ? Number(json.maxFileSizeBytes)
+                : uploadConfig.maxFileSizeBytes,
+            accept: Array.isArray(json.accept) ? json.accept : [...uploadConfig.allowedExtensions],
+          });
+        }
+      })
+      .catch(() => {});
   }, [fetchList]);
 
   const pickFile = useCallback(
@@ -133,7 +170,7 @@ export function UploadConsole() {
         setFile(null);
         return;
       }
-      const err = fileError(next);
+      const err = fileError(next, serverConfig.maxFileSizeBytes);
       if (err) {
         setFormError(err);
         return;
@@ -141,7 +178,7 @@ export function UploadConsole() {
       setFile(next);
       setTitle((t) => t || titleFromFilename(next.name));
     },
-    []
+    [serverConfig.maxFileSizeBytes]
   );
 
   const onDrop = useCallback(
@@ -157,6 +194,112 @@ export function UploadConsole() {
   const canSubmit =
     file !== null && title.trim() !== "" && author.trim() !== "" && !uploading;
 
+  function resetForm() {
+    setFile(null);
+    setTitle("");
+    setAuthor("");
+    setTranslator("");
+    setDescription("");
+    setPublisher("");
+    setEdition("");
+    setLicense("");
+    setSeries("");
+    setVolumeLabel("");
+    setPageCount("");
+    setCategory("other");
+    setLanguage("en");
+    setUploadProgress(0);
+    setUploadStage(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  function metadataPayload() {
+    return {
+      title: title.trim(),
+      author: author.trim(),
+      translator: translator.trim() || undefined,
+      category,
+      language,
+      description: description.trim() || undefined,
+      publisher: publisher.trim() || undefined,
+      edition: edition.trim() || undefined,
+      license: license.trim() || undefined,
+      series: series.trim() || undefined,
+      volumeLabel: volumeLabel.trim() || undefined,
+      pageCount: pageCount.trim() || undefined,
+    };
+  }
+
+  /** PUT a large file straight to object storage with real progress. */
+  function putDirect(url: string, f: File): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("PUT", url);
+      xhr.setRequestHeader("Content-Type", f.type || "application/octet-stream");
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable && e.total > 0) {
+          setUploadProgress(Math.round((e.loaded / e.total) * 100));
+        }
+      };
+      xhr.onload = () =>
+        xhr.status >= 200 && xhr.status < 300
+          ? resolve()
+          : reject(
+              new Error(`Storage upload failed (HTTP ${xhr.status}). Retry the upload.`)
+            );
+      xhr.onerror = () =>
+        reject(new Error("Storage upload failed (network error). Retry the upload."));
+      xhr.onabort = () => reject(new Error("Upload cancelled."));
+      xhr.send(f);
+    });
+  }
+
+  /** Production path: presign → direct PUT → complete. */
+  async function submitDirect(f: File) {
+    setUploadStage("Preparing upload…");
+    setUploadProgress(2);
+    const pre = await fetch("/api/uploads/presign", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        ...metadataPayload(),
+        filename: f.name,
+        mimeType: f.type || "application/octet-stream",
+        fileSize: f.size,
+      }),
+    });
+    const preJson = await pre.json().catch(() => ({}));
+    if (!pre.ok) throw new Error(preJson.error ?? "Could not start the upload.");
+
+    setUploadStage(`Uploading ${formatBytes(f.size)}…`);
+    await putDirect(preJson.uploadUrl, f);
+
+    setUploadStage("Finalizing…");
+    setUploadProgress(100);
+    const done = await fetch(
+      `/api/uploads/${encodeURIComponent(preJson.item.id)}/complete`,
+      { method: "POST" }
+    );
+    const doneJson = await done.json().catch(() => ({}));
+    if (!done.ok) throw new Error(doneJson.error ?? "Could not finalize the upload.");
+    return doneJson.item;
+  }
+
+  /** Dev fallback: multipart POST through the Next.js server. */
+  async function submitLocal(f: File) {
+    const fd = new FormData();
+    fd.set("file", f);
+    const meta = metadataPayload();
+    for (const [k, v] of Object.entries(meta)) {
+      if (v !== undefined) fd.set(k, String(v));
+    }
+    setUploadStage("Uploading…");
+    const res = await fetch("/api/uploads", { method: "POST", body: fd });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.error ?? "Upload failed.");
+    return json.item;
+  }
+
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setNotice(null);
@@ -168,48 +311,31 @@ export function UploadConsole() {
       setFormError("Title and author are required.");
       return;
     }
+    const sizeErr = fileError(file, serverConfig.maxFileSizeBytes);
+    if (sizeErr) {
+      setFormError(sizeErr);
+      return;
+    }
     setFormError(null);
     setUploading(true);
+    setUploadProgress(0);
     try {
-      const fd = new FormData();
-      fd.set("file", file);
-      fd.set("title", title.trim());
-      fd.set("author", author.trim());
-      if (translator.trim()) fd.set("translator", translator.trim());
-      fd.set("category", category);
-      fd.set("language", language);
-      if (description.trim()) fd.set("description", description.trim());
-      if (publisher.trim()) fd.set("publisher", publisher.trim());
-      if (edition.trim()) fd.set("edition", edition.trim());
-      if (license.trim()) fd.set("license", license.trim());
-      if (pageCount.trim()) fd.set("pageCount", pageCount.trim());
-
-      const res = await fetch("/api/uploads", { method: "POST", body: fd });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error ?? "Upload failed.");
-
+      const item =
+        serverConfig.provider === "r2"
+          ? await submitDirect(file)
+          : await submitLocal(file);
       setNotice({
         kind: "ok",
-        text: `“${json.item.title}” is stored and now live in the library for the website/app.`,
+        text: `“${item.title}” is stored and now live in the library for the website/app.`,
       });
-      setFile(null);
-      setTitle("");
-      setAuthor("");
-      setTranslator("");
-      setDescription("");
-      setPublisher("");
-      setEdition("");
-      setLicense("");
-      setPageCount("");
-      setCategory("other");
-      setLanguage("en");
-      if (fileInputRef.current) fileInputRef.current.value = "";
+      resetForm();
       await fetchList();
     } catch (err) {
       setNotice({
         kind: "err",
         text: err instanceof Error ? err.message : "Upload failed.",
       });
+      setUploadStage(null);
     } finally {
       setUploading(false);
     }
@@ -248,8 +374,18 @@ export function UploadConsole() {
           </CardTitle>
           <CardDescription>
             PDF, DOCX, EPUB, TXT or Markdown up to{" "}
-            {formatBytes(uploadConfig.maxFileSizeBytes)}. Stored on this
-            server and served to the Islam24X7 website/app.
+            {formatBytes(serverConfig.maxFileSizeBytes)} per file.{" "}
+            {serverConfig.provider === "r2" ? (
+              <>
+                Files stream <strong>directly to cloud storage</strong> with
+                resume-safe progress — built for ~1000-page volumes.
+              </>
+            ) : (
+              <>
+                Dev-disk mode: files are stored on this server. Configure
+                object storage (S3_* env) for production-sized books.
+              </>
+            )}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -355,7 +491,18 @@ export function UploadConsole() {
               </p>
             ) : null}
 
-            {uploading ? <Progress value={60} className="h-1.5" /> : null}
+            {uploading ? (
+              <div className="flex flex-col gap-1.5" aria-live="polite">
+                <Progress value={uploadProgress} className="h-1.5" />
+                <p className="text-xs text-muted-foreground">
+                  {uploadStage ?? "Uploading…"}
+                  {serverConfig.provider === "r2" && uploadProgress > 0
+                    ? ` ${uploadProgress}%`
+                    : ""}
+                  {" — keep this tab open."}
+                </p>
+              </div>
+            ) : null}
 
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="flex flex-col gap-1.5 sm:col-span-2">
@@ -464,6 +611,24 @@ export function UploadConsole() {
                   placeholder="e.g. Public domain, with permission"
                 />
               </div>
+              <div className="flex flex-col gap-1.5 sm:col-span-2">
+                <Label htmlFor="up-series">Series / collection</Label>
+                <Input
+                  id="up-series"
+                  value={series}
+                  onChange={(e) => setSeries(e.target.value)}
+                  placeholder="e.g. Fatawa Rizvia — same name groups all volumes"
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="up-volume">Volume label</Label>
+                <Input
+                  id="up-volume"
+                  value={volumeLabel}
+                  onChange={(e) => setVolumeLabel(e.target.value)}
+                  placeholder="e.g. Volume 7"
+                />
+              </div>
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="up-pages">Pages</Label>
                 <Input
@@ -473,7 +638,7 @@ export function UploadConsole() {
                   onChange={(e) =>
                     setPageCount(e.target.value.replace(/[^0-9]/g, ""))
                   }
-                  placeholder="Optional"
+                  placeholder="e.g. 1000"
                 />
               </div>
             </div>
@@ -482,7 +647,7 @@ export function UploadConsole() {
               {uploading ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-                  Uploading…
+                  {uploadStage ?? "Uploading…"}
                 </>
               ) : (
                 <>
@@ -492,8 +657,10 @@ export function UploadConsole() {
               )}
             </Button>
             <p className="text-center text-[11px] text-muted-foreground">
-              Upload only books you have the right to share. Files are stored
-              on this server and become readable in the library immediately.
+              Multi-volume work? Upload <strong>one file per volume</strong>{" "}
+              with the same series name and a volume label — all 32 volumes
+              stay grouped and individually fetchable. Only upload books you
+              have the right to share.
             </p>
           </form>
         </CardContent>
@@ -552,10 +719,14 @@ export function UploadConsole() {
                   className="flex items-start justify-between gap-3 rounded-xl border bg-card p-3"
                 >
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-semibold">{row.title}</p>
+                    <p className="truncate text-sm font-semibold">
+                      {row.title}
+                      {row.volumeLabel ? ` — ${row.volumeLabel}` : ""}
+                    </p>
                     <p className="truncate text-xs text-muted-foreground">
                       {row.author} · {row.originalFilename} ·{" "}
-                      {formatBytes(row.fileSize)}
+                      {row.fileSize > 0 ? formatBytes(row.fileSize) : "size pending"}
+                      {row.series ? ` · ${row.series}` : ""}
                     </p>
                     <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                       <Badge variant="secondary" className="text-[10px]">
@@ -566,17 +737,27 @@ export function UploadConsole() {
                       <Badge variant="outline" className="text-[10px] uppercase">
                         {row.language}
                       </Badge>
-                      <Badge variant="outline" className="text-[10px]">
-                        {row.status}
+                      <Badge
+                        variant={row.status === "ready" ? "outline" : "destructive"}
+                        className="text-[10px]"
+                      >
+                        {row.status === "uploading" ? "upload in progress" : row.status}
                       </Badge>
+                      {row.storage === "r2" ? (
+                        <Badge variant="outline" className="text-[10px]">
+                          cloud
+                        </Badge>
+                      ) : null}
                     </div>
                   </div>
                   <div className="flex shrink-0 items-center gap-1">
-                    <Button asChild variant="ghost" size="icon" aria-label={`Download ${row.title}`}>
-                      <a href={row.fileUrl} download={row.originalFilename}>
-                        <Download className="h-4 w-4" aria-hidden="true" />
-                      </a>
-                    </Button>
+                    {row.fileUrl ? (
+                      <Button asChild variant="ghost" size="icon" aria-label={`Download ${row.title}`}>
+                        <a href={row.fileUrl} download={row.originalFilename}>
+                          <Download className="h-4 w-4" aria-hidden="true" />
+                        </a>
+                      </Button>
+                    ) : null}
                     <Button
                       variant="ghost"
                       size="icon"

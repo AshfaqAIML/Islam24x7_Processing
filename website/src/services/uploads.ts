@@ -2,11 +2,17 @@ import { db } from "@/lib/db";
 import type { Book } from "@/types/knowledge-base";
 
 /**
- * Uploads service — local ingestion store (server-only).
+ * Uploads service — ingestion store (server-only).
  *
- * Uploaded books are persisted in SQLite (BookUpload) with the file on
- * disk. They are merged into the library catalogue by src/services/books.ts
- * so /api/books, /library and the mobile app fetch them like any KB book.
+ * Uploaded books are persisted in Postgres (BookUpload) with the file in
+ * object storage (R2/S3, production) or on local disk (dev fallback).
+ * Ready rows are merged into the library catalogue by
+ * src/services/books.ts so /api/books, /library and the mobile app fetch
+ * them like any KB book.
+ *
+ * Large-file flow (production): presign → browser PUTs directly to
+ * storage → complete. The Next.js server never sees the bytes, so
+ * serverless body limits don't apply.
  */
 
 export interface UploadedBookRecord {
@@ -20,10 +26,14 @@ export interface UploadedBookRecord {
   publisher: string | null;
   edition: string | null;
   license: string | null;
+  series: string | null;
+  volumeLabel: string | null;
   originalFilename: string;
   mimeType: string;
   fileSize: number;
+  storage: string;
   storagePath: string;
+  objectKey: string | null;
   fileUrl: string;
   status: string;
   pageCount: number | null;
@@ -32,9 +42,10 @@ export interface UploadedBookRecord {
   updatedAt: Date;
 }
 
-async function tableReady(): Promise<boolean> {
+export async function tableReady(): Promise<boolean> {
   try {
-    // Throws (P2021 table does not exist) until `prisma db push` has run.
+    // False until `prisma db push` has run (or the DB is unreachable) —
+    // every caller degrades gracefully instead of crashing the route.
     await db.bookUpload.findFirst({ select: { id: true } });
     return true;
   } catch {
@@ -44,11 +55,15 @@ async function tableReady(): Promise<boolean> {
 
 export async function listUploads(options?: {
   status?: string;
+  series?: string;
   limit?: number;
 }): Promise<UploadedBookRecord[]> {
   if (!(await tableReady())) return [];
   return db.bookUpload.findMany({
-    where: options?.status ? { status: options.status } : undefined,
+    where: {
+      ...(options?.status ? { status: options.status } : {}),
+      ...(options?.series ? { series: options.series } : {}),
+    },
     orderBy: { createdAt: "desc" },
     take: Math.min(Math.max(options?.limit ?? 100, 1), 500),
   });
@@ -76,6 +91,8 @@ export interface UploadedFileMeta {
   fileSize: number;
   mimeType: string;
   uploadId: string;
+  series?: string;
+  volumeLabel?: string;
 }
 
 export async function getUploadedBook(
@@ -101,6 +118,8 @@ export function toBook(row: {
   publisher: string | null;
   edition: string | null;
   license: string | null;
+  series: string | null;
+  volumeLabel: string | null;
   fileUrl: string;
   originalFilename: string;
   fileSize: number;
@@ -108,16 +127,20 @@ export function toBook(row: {
   pageCount: number | null;
   createdAt: Date;
 }): Book & UploadedFileMeta {
+  const volumeSuffix = row.volumeLabel ? ` — ${row.volumeLabel}` : "";
   return {
     id: `upload-${row.id}`,
-    title: row.title,
+    title: `${row.title}${volumeSuffix}`,
     author: row.author,
     translator: row.translator ?? undefined,
-    // Stored as plain strings; fall back to "other" for unknown values so
-    // the BookCard label maps never crash.
+    // Stored as plain strings; the BookCard label maps fall back to the
+    // raw value for unknown entries so they never crash.
     category: row.category as Book["category"],
     language: row.language as Book["language"],
-    description: row.description ?? undefined,
+    description:
+      [row.description, row.series ? `Part of the ${row.series} series.` : null]
+        .filter(Boolean)
+        .join(" ") || undefined,
     publisher: row.publisher ?? undefined,
     edition: row.edition ?? undefined,
     license: row.license ?? undefined,
@@ -132,5 +155,7 @@ export function toBook(row: {
     fileSize: row.fileSize,
     mimeType: row.mimeType,
     uploadId: row.id,
+    series: row.series ?? undefined,
+    volumeLabel: row.volumeLabel ?? undefined,
   };
 }

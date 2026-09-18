@@ -7,6 +7,7 @@ import {
   isAllowedExtension,
   uploadConfig,
 } from "@/config/uploads";
+import { isS3Configured } from "@/config/storage";
 import { uniqueFilename, uploadsDir } from "@/lib/upload-storage";
 
 export const runtime = "nodejs";
@@ -35,7 +36,7 @@ function badRequest(message: string) {
 }
 
 /**
- * GET /api/uploads?status=&limit=
+ * GET /api/uploads?status=&series=&limit=
  * Lists ingested books (newest first). Powers the admin console table and
  * any operator tooling around the processing pipeline.
  */
@@ -43,12 +44,16 @@ export async function GET(request: NextRequest) {
   try {
     const sp = request.nextUrl.searchParams;
     const status = sp.get("status") ?? undefined;
+    const series = sp.get("series") ?? undefined;
     const limit = Math.min(
       Math.max(Number(sp.get("limit") ?? "100") || 100, 1),
       500
     );
     const rows = await db.bookUpload.findMany({
-      where: status ? { status } : undefined,
+      where: {
+        ...(status ? { status } : {}),
+        ...(series ? { series } : {}),
+      },
       orderBy: { createdAt: "desc" },
       take: limit,
     });
@@ -66,16 +71,30 @@ export async function GET(request: NextRequest) {
 }
 
 /**
- * POST /api/uploads (multipart/form-data)
+ * POST /api/uploads (multipart/form-data) — DEV FALLBACK ONLY.
  * Fields: file (required), title (required), author (required),
  * translator?, category?, language?, description?, publisher?, edition?,
- * license?, pageCount?
+ * license?, series?, volumeLabel?, pageCount?
  *
  * Stores the file under public/uploads/books and creates a ready
  * BookUpload row so the book is immediately fetchable from /api/books,
  * /library and the mobile app.
+ *
+ * Real books (100s of MB, e.g. multi-volume sets) must use
+ * POST /api/uploads/presign instead: serverless platforms cap request
+ * bodies (~4.5 MB on Vercel), so large files upload directly to object
+ * storage and never pass through this route.
  */
 export async function POST(request: NextRequest) {
+  if (isS3Configured()) {
+    return NextResponse.json(
+      {
+        error:
+          "Direct upload is required on this server. Use POST /api/uploads/presign so the file goes straight to object storage.",
+      },
+      { status: 413 }
+    );
+  }
   let form: FormData;
   try {
     form = await request.formData();
@@ -93,6 +112,8 @@ export async function POST(request: NextRequest) {
   const publisher = String(form.get("publisher") ?? "").trim() || null;
   const edition = String(form.get("edition") ?? "").trim() || null;
   const license = String(form.get("license") ?? "").trim() || null;
+  const series = String(form.get("series") ?? "").trim() || null;
+  const volumeLabel = String(form.get("volumeLabel") ?? "").trim() || null;
   const pageCountRaw = String(form.get("pageCount") ?? "").trim();
   const pageCount = pageCountRaw ? Number(pageCountRaw) : null;
 
@@ -141,9 +162,12 @@ export async function POST(request: NextRequest) {
         publisher,
         edition,
         license,
+        series,
+        volumeLabel,
         originalFilename,
         mimeType: file.type || "application/octet-stream",
         fileSize: file.size,
+        storage: "local",
         storagePath: path.join(dir, filename),
         fileUrl,
         status: "ready",

@@ -17,6 +17,12 @@ Knowledge Base or AI backend directly** — no secrets reach the client.
 | GET | `/api/ai/ask` | AI capability probe |
 | GET | `/api/releases/latest` | APK release metadata + live availability |
 | GET/POST | `/api/downloads/track` | Anonymous download counter |
+| GET | `/api/uploads?status=&series=&limit=` | List ingested books (operator console) |
+| GET | `/api/uploads/config` | Upload capability probe (`provider: r2\|local`, limits) |
+| POST | `/api/uploads` (multipart) | Dev-disk upload fallback — 413 when object storage is configured |
+| POST | `/api/uploads/presign` (JSON) | Production path: validate metadata + return presigned PUT URL |
+| GET/DELETE | `/api/uploads/:id` | One ingested book / delete row + stored file |
+| POST | `/api/uploads/:id/complete` | Verify the direct upload arrived → mark `ready` (fetchable) |
 
 ## Planned (per contract, `src/types/knowledge-base.ts`)
 
@@ -34,6 +40,8 @@ GET/POST /api/bookmarks | /api/notes | /api/reading-progress (Phase 8)
 |---|---|---|
 | `KNOWLEDGE_BASE_API_URL` | server | Live data provider; unset/failed ⇒ labeled demo fallback |
 | `AI_API_URL` | server | RAG endpoint for `/api/ai/ask`; unset ⇒ honest 503 |
+| `DATABASE_URL` | server | Hosted Postgres; unreachable ⇒ uploads degrade to honest 503, library serves demo |
+| `S3_*` | server | Object storage for book files; unset ⇒ local-disk dev fallback |
 | `APK_*` | server | Release metadata (see APK_RELEASE.md) |
 | `NEXT_PUBLIC_USE_MOCK_DATA` | client | Force demo mode |
 
