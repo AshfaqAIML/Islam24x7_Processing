@@ -1,8 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { BookOpen } from "lucide-react";
+import { BookOpen, Download, FileText } from "lucide-react";
 import type { Book } from "@/types/knowledge-base";
+import type { UploadedFileMeta } from "@/services/uploads";
+import { formatBytes } from "@/config/uploads";
 import { demoCategoryLabels } from "@/lib/demo/books";
 import { cn } from "@/lib/utils";
 import { Card, CardContent } from "@/components/ui/card";
@@ -10,22 +12,31 @@ import { DemoBadge } from "@/components/common/states";
 import { StarLattice } from "@/components/decor/islamic-pattern";
 import { FavoriteButton } from "@/components/library/favorite-button";
 
+type CardBook = Book & {
+  coverHue?: number;
+} & Partial<UploadedFileMeta>;
+
 /**
- * Reusable book card — links to the book detail page. Renders labeled demo
- * records until the Knowledge Base connects; the API contract is identical.
+ * Reusable book card — links to the book detail page.
+ *
+ * Two flavours, rendered honestly:
+ *  - real ingested volumes (id `upload-*`, with a fileUrl): series/volume
+ *    line, file size, PDF badge and a direct download action.
+ *  - labeled demo placeholders: the Demo badge, exactly as before.
  */
 export function BookCard({
   book,
   href,
   className,
 }: {
-  book: Book & { coverHue?: number };
+  book: CardBook;
   /** Override destination (defaults to the book detail page). */
   href?: string;
   className?: string;
 }) {
   const hue = book.coverHue ?? 165;
   const dest = href ?? `/library/${book.id}`;
+  const isReal = book.id.startsWith("upload-") || Boolean(book.fileUrl);
 
   return (
     <Card
@@ -35,7 +46,7 @@ export function BookCard({
       )}
     >
       <CardContent className="flex gap-4 p-4">
-        {/* Cover (generated placeholder — real covers come from the KB) */}
+        {/* Cover (generated placeholder — real covers come with text processing) */}
         <Link
           href={dest}
           className="focus-ring relative aspect-[3/4] w-20 shrink-0 overflow-hidden rounded-md sm:w-24"
@@ -71,22 +82,53 @@ export function BookCard({
                 {book.title}
               </Link>
             </h3>
-            {book.isDemo ? <DemoBadge className="mt-0.5 shrink-0" /> : null}
+            {book.isDemo ? (
+              <DemoBadge className="mt-0.5 shrink-0" />
+            ) : isReal ? (
+              <span
+                className="mt-0.5 inline-flex shrink-0 items-center gap-1 rounded-full border border-primary/30 bg-primary/5 px-2 py-0.5 text-[11px] font-medium text-primary"
+                title="Real ingested volume — full PDF available"
+              >
+                <FileText className="h-3 w-3" aria-hidden="true" />
+                PDF
+              </span>
+            ) : null}
           </div>
-          <p className="mb-2 line-clamp-1 text-xs text-muted-foreground sm:text-sm">
+          <p className="mb-1 line-clamp-1 text-xs text-muted-foreground sm:text-sm">
             {book.author}
             {book.translator ? ` · tr. ${book.translator}` : ""}
           </p>
+          {book.series ? (
+            <p className="mb-1 line-clamp-1 text-[11px] font-medium text-gold-foreground dark:text-gold">
+              {book.series}
+            </p>
+          ) : null}
           <div className="mt-auto flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
             <span className="rounded-full bg-secondary px-2 py-0.5 font-medium text-secondary-foreground">
               {demoCategoryLabels[book.category] ?? book.category}
             </span>
             <span className="uppercase">{book.language}</span>
             {book.pageCount ? <span>· {book.pageCount} pages</span> : null}
+            {typeof book.fileSize === "number" && book.fileSize > 0 ? (
+              <span>· {formatBytes(book.fileSize)}</span>
+            ) : null}
           </div>
         </div>
 
-        <FavoriteButton bookId={book.id} bookTitle={book.title} />
+        <div className="flex shrink-0 flex-col items-center gap-1">
+          {isReal && book.fileUrl ? (
+            <a
+              href={book.fileUrl}
+              download={book.originalFilename ?? true}
+              aria-label={`Download ${book.title} (PDF)`}
+              title={`Download ${book.title} (PDF)`}
+              className="focus-ring rounded-full p-2 text-primary transition-colors hover:bg-primary/10"
+            >
+              <Download className="h-4 w-4" aria-hidden="true" />
+            </a>
+          ) : null}
+          <FavoriteButton bookId={book.id} bookTitle={book.title} />
+        </div>
       </CardContent>
     </Card>
   );

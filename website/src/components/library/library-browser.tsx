@@ -410,11 +410,11 @@ export function LibraryBrowser() {
         <CardContent className="flex items-start gap-3 p-4 text-xs leading-relaxed text-muted-foreground">
           <BookOpen className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
           <p>
-            This library currently serves <strong>labeled demo records</strong>{" "}
-            so the browsing experience can be reviewed before the Knowledge
-            Base connects. No real Islamic work is being imitated — titles,
-            authors and contents are placeholders, and reading opens with the
-            Reader phase.{" "}
+            This library mixes <strong>real ingested volumes</strong> — full
+            PDFs, marked with a PDF badge and a download action — with{" "}
+            <strong>labeled demo records</strong> where the Knowledge Base is
+            still connecting. Demo titles, authors and contents are
+            placeholders, never imitations of real works.{" "}
             <Link
               href="/"
               className="focus-ring rounded-sm font-medium text-primary underline-offset-4 hover:underline"

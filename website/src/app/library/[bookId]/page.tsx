@@ -6,12 +6,16 @@ import {
   ArrowRight,
   BookOpen,
   CalendarDays,
+  Download,
   FileText,
+  HardDriveDownload,
   Languages,
   Layers,
+  Library,
   Sparkles,
 } from "lucide-react";
 import { getBook, getBookChapters } from "@/services/books";
+import { formatBytes } from "@/config/uploads";
 import { demoCategoryLabels, demoLanguageLabels } from "@/lib/demo/books";
 import { brand } from "@/config/brand";
 import { routes } from "@/config/site";
@@ -49,6 +53,10 @@ export default async function BookDetailPage({ params }: PageProps) {
   if (!book) notFound();
 
   const hue = (book as { coverHue?: number }).coverHue ?? 165;
+  const fileUrl = (book as { fileUrl?: string }).fileUrl;
+  const fileSize = (book as { fileSize?: number }).fileSize;
+  const series = (book as { series?: string }).series;
+  const isReal = book.id.startsWith("upload-") || Boolean(fileUrl);
 
   return (
     <main className="flex-1">
@@ -91,6 +99,12 @@ export default async function BookDetailPage({ params }: PageProps) {
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               {book.isDemo ? <DemoBadge /> : null}
+              {isReal ? (
+                <span className="inline-flex items-center gap-1 rounded-full border border-primary/30 bg-primary/5 px-2.5 py-0.5 text-xs font-medium text-primary">
+                  <FileText className="h-3 w-3" aria-hidden="true" />
+                  Real volume · full PDF
+                </span>
+              ) : null}
               <span className="rounded-full bg-secondary px-2.5 py-0.5 text-xs font-medium text-secondary-foreground">
                 {demoCategoryLabels[book.category] ?? book.category}
               </span>
@@ -102,6 +116,12 @@ export default async function BookDetailPage({ params }: PageProps) {
               {book.author}
               {book.translator ? ` · translated by ${book.translator}` : ""}
             </p>
+            {series ? (
+              <p className="mt-1.5 flex items-center gap-1.5 text-sm font-medium text-gold-foreground dark:text-gold">
+                <Library className="h-4 w-4" aria-hidden="true" />
+                Part of the {series} series
+              </p>
+            ) : null}
 
             <dl className="mt-4 flex flex-wrap gap-x-5 gap-y-2 text-sm text-muted-foreground">
               <div className="flex items-center gap-1.5">
@@ -119,6 +139,13 @@ export default async function BookDetailPage({ params }: PageProps) {
                 <dt className="sr-only">Chapters</dt>
                 <dd>{chapters.length} chapters</dd>
               </div>
+              {typeof fileSize === "number" && fileSize > 0 ? (
+                <div className="flex items-center gap-1.5">
+                  <HardDriveDownload className="h-4 w-4" aria-hidden="true" />
+                  <dt className="sr-only">File size</dt>
+                  <dd>{formatBytes(fileSize)} PDF</dd>
+                </div>
+              ) : null}
               {book.addedAt ? (
                 <div className="flex items-center gap-1.5">
                   <CalendarDays className="h-4 w-4" aria-hidden="true" />
@@ -132,12 +159,24 @@ export default async function BookDetailPage({ params }: PageProps) {
 
             {/* Actions */}
             <div className="mt-5 flex flex-wrap items-center gap-2.5">
-              <Button asChild size="lg" className="gap-2">
-                <Link href={`/library/${book.id}/read`}>
-                  <BookOpen className="h-4 w-4" aria-hidden="true" />
-                  Open reader
-                </Link>
-              </Button>
+              {isReal && fileUrl ? (
+                <Button asChild size="lg" className="gap-2">
+                  <a href={fileUrl} download>
+                    <Download className="h-4 w-4" aria-hidden="true" />
+                    Download PDF
+                    {typeof fileSize === "number" && fileSize > 0
+                      ? ` (${formatBytes(fileSize)})`
+                      : ""}
+                  </a>
+                </Button>
+              ) : (
+                <Button asChild size="lg" className="gap-2">
+                  <Link href={`/library/${book.id}/read`}>
+                    <BookOpen className="h-4 w-4" aria-hidden="true" />
+                    Open reader
+                  </Link>
+                </Button>
+              )}
               <FavoriteButton bookId={book.id} bookTitle={book.title} size="lg" />
             </div>
             <div className="mt-2.5">
@@ -157,8 +196,18 @@ export default async function BookDetailPage({ params }: PageProps) {
               id="reader-phase-note"
               className="mt-2 text-xs text-muted-foreground"
             >
-              The reader remembers your place, offers type &amp; paper settings,
-              and accepts deep links — <code className="rounded bg-muted px-1">/library/{book.id}/read</code> opens this volume; bookmarks, highlights and notes sync from Phase 8.
+              {isReal ? (
+                <>
+                  Best on mobile too — the same file serves the Android app
+                  through <code className="rounded bg-muted px-1">/api/books</code>.
+                  In-page reading for scanned volumes arrives with text processing.
+                </>
+              ) : (
+                <>
+                  The reader remembers your place, offers type &amp; paper settings,
+                  and accepts deep links — <code className="rounded bg-muted px-1">/library/{book.id}/read</code> opens this volume; bookmarks, highlights and notes sync from Phase 8.
+                </>
+              )}
             </p>
           </div>
         </div>
@@ -216,8 +265,9 @@ export default async function BookDetailPage({ params }: PageProps) {
                 ))}
                 {chapters.length === 0 ? (
                   <li className="px-5 py-6 text-center text-sm text-muted-foreground">
-                    Chapter data for this volume arrives with the Knowledge
-                    Base.
+                    {isReal
+                      ? "The full text of this volume is available as a PDF download above. Chapter-by-chapter reading arrives with text processing."
+                      : "Chapter data for this volume arrives with the Knowledge Base."}
                   </li>
                 ) : null}
               </ol>
@@ -227,11 +277,22 @@ export default async function BookDetailPage({ params }: PageProps) {
 
         <Separator className="my-8" />
         <p className="text-xs leading-relaxed text-muted-foreground">
-          This is a labeled demo record used to design the library experience.
-          It does not represent any real Islamic work. Real volumes, covers and
-          full texts stream from the Knowledge Base once{" "}
-          <code className="rounded bg-muted px-1">KNOWLEDGE_BASE_API_URL</code>{" "}
-          is configured.
+          {isReal ? (
+            <>
+              This is a real ingested volume{series ? ` from the ${series} series` : ""},
+              stored in the Islam24X7 library and served as a full PDF.
+              Chapter extraction, search indexing and AI citations for it
+              arrive with text processing.
+            </>
+          ) : (
+            <>
+              This is a labeled demo record used to design the library experience.
+              It does not represent any real Islamic work. Real volumes, covers and
+              full texts stream from the Knowledge Base once{" "}
+              <code className="rounded bg-muted px-1">KNOWLEDGE_BASE_API_URL</code>{" "}
+              is configured.
+            </>
+          )}
         </p>
       </div>
     </main>
