@@ -13,6 +13,7 @@ import {
   ScrollText,
   Search,
   Sparkles,
+  Upload,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { mainNav, buildProgress, routes } from "@/config/site";
@@ -30,6 +31,7 @@ const navIcons: Record<string, LucideIcon> = {
   Quran: BookOpenText,
   Hadith: ScrollText,
   Library: Library,
+  Upload: Upload,
   "Ask AI": Sparkles,
 };
 

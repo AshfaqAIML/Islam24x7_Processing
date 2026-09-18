@@ -19,6 +19,7 @@ import type {
 import { demoBooks, demoChaptersFor } from "@/lib/demo/books";
 import { demoPagesFor } from "@/lib/demo/pages";
 import { kbDataSource, kbFetch } from "@/services/kb";
+import { getUploadedBook, listReadyBooks } from "@/services/uploads";
 
 export type BookSort = "recent" | "title" | "pages";
 
@@ -126,19 +127,99 @@ function getBookPagesLive(
 
 /* -------------------------------- public --------------------------------- */
 
+/**
+ * Local uploads are merged in front of demo/live results so anything
+ * ingested via /admin/upload is immediately fetchable from /api/books,
+ * /library and the mobile app. Filters (q/category/language) and sorting
+ * apply to uploaded rows exactly like catalogue books.
+ */
+function applyFilters(
+  items: Book[],
+  params: ListBooksParams
+): Book[] {
+  const q = params.q?.trim().toLowerCase() ?? "";
+  let out = [...items];
+  if (params.category && params.category !== "all") {
+    out = out.filter((b) => b.category === params.category);
+  }
+  if (params.language && params.language !== "all") {
+    out = out.filter((b) => b.language === params.language);
+  }
+  if (q) {
+    out = out.filter((b) =>
+      [b.title, b.author, b.description ?? ""]
+        .join(" ")
+        .toLowerCase()
+        .includes(q)
+    );
+  }
+  switch (params.sort ?? "recent") {
+    case "title":
+      out.sort((a, b) => a.title.localeCompare(b.title));
+      break;
+    case "pages":
+      out.sort((a, b) => (b.pageCount ?? 0) - (a.pageCount ?? 0));
+      break;
+    default:
+      out.sort((a, b) => (b.addedAt ?? "").localeCompare(a.addedAt ?? ""));
+  }
+  return out;
+}
+
 export async function listBooks(params: ListBooksParams = {}): Promise<BooksPage> {
+  const page = Math.max(1, params.page ?? 1);
+  const pageSize = Math.min(48, Math.max(1, params.pageSize ?? DEFAULT_PAGE_SIZE));
+
+  // Uploaded books first — never let a broken local store break the library.
+  let uploaded: Book[] = [];
+  try {
+    uploaded = applyFilters(await listReadyBooks(), params);
+  } catch {
+    uploaded = [];
+  }
+
+  let base: BooksPage;
   if (kbDataSource() === "live") {
     try {
-      return await listBooksLive(params);
+      base = await listBooksLive(params);
     } catch {
-      // Degrade honestly: the UI shows a "live source unreachable" note.
-      return { ...listBooksDemo(params), source: "demo" };
+      base = { ...listBooksDemo(params), source: "demo" };
     }
+  } else {
+    base = listBooksDemo(params);
   }
-  return listBooksDemo(params);
+
+  // When paginating, uploads occupy the head of page 1; later pages fall
+  // through to the base catalogue. Total counts both sources honestly.
+  if (page === 1) {
+    const head = uploaded.slice(0, pageSize);
+    const remaining = pageSize - head.length;
+    const items = remaining > 0 ? [...head, ...base.items.slice(0, remaining)] : head;
+    return {
+      items,
+      total: uploaded.length + base.total,
+      page,
+      pageSize,
+      hasMore: uploaded.length + base.total > items.length,
+      source: uploaded.length > 0 ? "live" : base.source,
+    };
+  }
+
+  // Page > 1: uploads already occupied the head of page 1, so later
+  // pages fall through to the base catalogue (total still counts both).
+  return base.total + uploaded.length > 0
+    ? { ...base, total: base.total + uploaded.length }
+    : base;
 }
 
 export async function getBook(id: string): Promise<(Book & { coverHue?: number }) | null> {
+  if (id.startsWith("upload-")) {
+    try {
+      return await getUploadedBook(id);
+    } catch {
+      return null;
+    }
+  }
   if (kbDataSource() === "live") {
     const live = await getBookLive(id);
     if (live) return live;
@@ -148,6 +229,9 @@ export async function getBook(id: string): Promise<(Book & { coverHue?: number }
 }
 
 export async function getBookChapters(bookId: string): Promise<BookChapter[]> {
+  // Uploaded files have no extracted TOC yet — the reader falls back to a
+  // download-first view using the book's fileUrl.
+  if (bookId.startsWith("upload-")) return [];
   if (kbDataSource() === "live") {
     const live = await getBookChaptersLive(bookId);
     if (live.length > 0) return live;

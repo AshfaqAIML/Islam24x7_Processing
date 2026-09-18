@@ -57,6 +57,12 @@ server.log
 # local dev database
 db/*.db
 db/*.db-journal
+prisma/db/
+prisma/*.db
+prisma/*.db-journal
+# uploaded book files (served from public/uploads in dev, object storage in prod)
+public/uploads/
+data/uploads/
 # tool output captures
 tool-results/
 .zscripts/dev.pid

@@ -28,6 +28,7 @@ export type TabItem = {
 export const routes = {
   home: "/",
   download: "/download",
+  upload: "/admin/upload",
   // Planned routes (implemented in later phases — never linked as active):
   library: "/library",
   quran: "/quran",
@@ -45,6 +46,7 @@ export const routes = {
 export const mainNav: NavItem[] = [
   { label: "Home", href: routes.home },
   { label: "Library", href: routes.library },
+  { label: "Upload", href: routes.upload },
   { label: "Search", href: routes.search },
   { label: "Ask AI", href: routes.ai },
   { label: "Quran", href: routes.quran, soon: true, phase: 6 },
