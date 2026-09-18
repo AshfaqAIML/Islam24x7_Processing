@@ -9,6 +9,7 @@ import { SiteHeader } from "@/components/layout/site-header";
 import { SiteFooter } from "@/components/layout/site-footer";
 import { BottomTabBar } from "@/components/layout/bottom-tab-bar";
 import { ApkPromptProvider } from "@/components/apk/apk-prompt-provider";
+import { InstallAppHint } from "@/components/apk/install-app-hint";
 
 const bodyFont = Inter({
   subsets: ["latin"],
@@ -110,6 +111,8 @@ export default function RootLayout({
           />
           <BottomTabBar />
           <ApkPromptProvider />
+          {/* Mobile-only "Get the App" floating hint (PWA install path) */}
+          <InstallAppHint />
           <Toaster />
         </ThemeProvider>
       </body>

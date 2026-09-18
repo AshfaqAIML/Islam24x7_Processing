@@ -54,6 +54,12 @@ export default async function LibraryPage({
             and favorite. Serving labeled demo records until the Knowledge
             Base connects.
           </p>
+          <Link
+            href="/admin/upload"
+            className="focus-ring mt-4 inline-flex items-center gap-2 rounded-md border border-gold/50 px-4 py-2 text-sm font-medium text-gold-foreground transition-colors hover:bg-gold/10 dark:text-gold"
+          >
+            Upload a book (PDF / DOCX / EPUB)
+          </Link>
         </div>
       </section>
 

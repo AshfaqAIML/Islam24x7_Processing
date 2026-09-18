@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/tooltip";
 import { ThemeToggle } from "@/components/layout/theme-toggle";
 import { MoreSheet } from "@/components/layout/more-sheet";
+import { GetAppButton } from "@/components/apk/get-app-button";
 
 /**
  * Responsive site header. Mobile-first: logo + actions always visible,
@@ -96,17 +97,11 @@ export function SiteHeader() {
               <Search className="h-5 w-5" aria-hidden="true" />
             </Link>
           </Button>
-          <Button
-            asChild
+          <GetAppButton
             variant="outline"
             size="sm"
             className="hidden border-gold/50 text-gold-foreground hover:bg-gold/10 hover:text-gold-foreground dark:text-gold dark:hover:text-gold sm:inline-flex"
-          >
-            <Link href={routes.download}>
-              <Download className="h-4 w-4" aria-hidden="true" />
-              Get the App
-            </Link>
-          </Button>
+          />
           <Button
             asChild
             variant="outline"

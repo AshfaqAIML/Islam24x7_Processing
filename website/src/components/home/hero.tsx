@@ -2,11 +2,12 @@
 
 import Link from "next/link";
 import { motion, useReducedMotion } from "framer-motion";
-import { ArrowRight, Smartphone } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 import { brand } from "@/config/brand";
-import { buildProgress, routes } from "@/config/site";
+import { buildProgress } from "@/config/site";
 import { Button } from "@/components/ui/button";
 import { StarLattice } from "@/components/decor/islamic-pattern";
+import { GetAppButton } from "@/components/apk/get-app-button";
 
 /**
  * Phase-1 hero. Introduces the brand honestly: foundations are live,
@@ -67,12 +68,7 @@ export function Hero() {
           {...fadeUp(0.24)}
           className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row"
         >
-          <Button asChild size="lg" className="w-full sm:w-auto">
-            <Link href={routes.download}>
-              <Smartphone className="h-5 w-5" aria-hidden="true" />
-              Get the Android App
-            </Link>
-          </Button>
+          <GetAppButton size="lg" className="w-full gap-2 sm:w-auto" />
           <Button asChild size="lg" variant="outline" className="w-full sm:w-auto">
             <Link href="#modules">
               See what&apos;s inside
