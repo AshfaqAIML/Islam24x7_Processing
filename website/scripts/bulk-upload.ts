@@ -106,6 +106,19 @@ async function main() {
   const provider = cfg.json.provider === "r2" ? "r2" : "local";
   console.log(`Provider: ${provider} · files: ${files.length}`);
 
+  // Idempotency: skip files already stored as ready; clear stuck
+  // non-ready rows from interrupted runs so they re-upload cleanly.
+  const force = process.argv.includes("--force");
+  const existing = new Map<string, { id: string; status: string }>();
+  if (!force) {
+    const list = await apiJson(`${args.api}/api/uploads?limit=500`);
+    if (list.ok) {
+      for (const item of ((list.json.items ?? []) as Array<{ id: string; originalFilename: string; status: string }>)) {
+        existing.set(item.originalFilename.toLowerCase(), { id: item.id, status: item.status });
+      }
+    }
+  }
+
   let done = 0;
   const failed: string[] = [];
 
@@ -126,6 +139,19 @@ async function main() {
         : {}),
     };
     const label = `${title}${volumeLabel ? ` — ${volumeLabel}` : ""}`;
+    const prior = existing.get(filename.toLowerCase());
+    if (prior?.status === "ready") {
+      console.log(`[skip] already stored: ${label}`);
+      continue;
+    }
+    if (prior) {
+      // Stuck row from an interrupted run — remove, then upload fresh.
+      await apiJson(
+        `${args.api}/api/uploads/${encodeURIComponent(prior.id)}`,
+        { method: "DELETE" }
+      ).catch(() => ({ ok: false, status: 0, json: {} }));
+      existing.delete(filename.toLowerCase());
+    }
     try {
       if (provider === "r2") {
         const pre = await apiJson(`${args.api}/api/uploads/presign`, {
