@@ -59,8 +59,14 @@ function parseArgs(argv: string[]): Args {
 }
 
 function volumeLabelOf(filename: string): string | null {
-  const m = filename.match(/vol-?(\d{1,2})/i);
-  return m ? `Volume ${Number(m[1])}` : null;
+  const stem = filename.replace(/\.[^.]+$/, "");
+  // "…vol-01", "…vol_1" (any separator)…
+  const vol = stem.match(/vol[_.\s-]?(\d{1,3})/i);
+  if (vol) return `Volume ${Number(vol[1])}`;
+  // …or a trailing number: "Sunan Nisaye 2", "Nisaye1".
+  const trailing = stem.match(/(\d{1,3})$/);
+  if (trailing) return `Volume ${Number(trailing[1])}`;
+  return null;
 }
 
 function titleOf(filename: string, fallback: string): string {
